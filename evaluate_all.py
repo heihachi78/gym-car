@@ -22,7 +22,7 @@ import numpy as np
 import torch
 
 from agents import LSTMPPOAgent
-from utils import make_env, get_normalize_wrapper
+from utils import make_env
 
 
 def parse_args():
@@ -89,20 +89,11 @@ def evaluate_model(checkpoint_path, num_episodes, device):
         Dictionary with evaluation results
     """
     # Load agent
-    agent, obs_rms = LSTMPPOAgent.from_checkpoint(checkpoint_path, device=device)
+    agent = LSTMPPOAgent.from_checkpoint(checkpoint_path, device=device)
     agent.network.eval()
 
     # Create environment
     env = make_env(render_mode="rgb_array")
-
-    # Restore normalization statistics
-    if obs_rms is not None:
-        norm_wrapper = get_normalize_wrapper(env)
-        if norm_wrapper is not None:
-            norm_wrapper.obs_rms.mean = obs_rms['mean']
-            norm_wrapper.obs_rms.var = obs_rms['var']
-            norm_wrapper.obs_rms.count = obs_rms['count']
-            norm_wrapper.update_running_mean = False
 
     # Run evaluation episodes
     rewards = []

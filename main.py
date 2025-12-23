@@ -10,9 +10,8 @@ Usage:
 
 import argparse
 
-import gymnasium as gym
 from agents import LSTMPPOAgent
-from utils import make_env, get_normalize_wrapper
+from utils import make_env
 
 
 def parse_args():
@@ -31,10 +30,7 @@ def main():
 
     # Create wrapped environment for agent's processed observations
     # We use render_mode="human" to visualize the game window while the agent gets processed obs.
-    agent_env = make_env(
-        render_mode="human",
-        normalize=True,
-    )
+    agent_env = make_env(render_mode="human")
 
     if args.random:
         print("Playing with random actions...")
@@ -43,22 +39,9 @@ def main():
     else:
         print(f"Loading model from {args.checkpoint}")
         try:
-            agent, obs_rms = LSTMPPOAgent.from_checkpoint(args.checkpoint, device=args.device)
+            agent = LSTMPPOAgent.from_checkpoint(args.checkpoint, device=args.device)
             agent.network.eval()
             hidden = agent.get_initial_hidden()
-
-            # Restore normalization statistics
-            if obs_rms is not None:
-                norm_wrapper = get_normalize_wrapper(agent_env)
-                if norm_wrapper is not None:
-                    norm_wrapper.obs_rms.mean = obs_rms['mean']
-                    norm_wrapper.obs_rms.var = obs_rms['var']
-                    norm_wrapper.obs_rms.count = obs_rms['count']
-                    norm_wrapper.update_running_mean = False  # Freeze stats during inference
-                    print("Normalization statistics loaded!")
-            else:
-                print("Warning: No normalization statistics in checkpoint")
-
             print("Model loaded successfully!")
         except FileNotFoundError:
             print(f"Checkpoint not found: {args.checkpoint}")

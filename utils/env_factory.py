@@ -1,26 +1,8 @@
 import gymnasium as gym
-from gymnasium.wrappers import ResizeObservation, NormalizeObservation
+from gymnasium.wrappers import ResizeObservation
 from gymnasium.vector import AsyncVectorEnv
 
 from wrappers import CropObservation, SharpenObservation, EdgeObservation, RenderObservation
-
-
-def get_normalize_wrapper(env: gym.Env) -> NormalizeObservation | None:
-    """
-    Find NormalizeObservation wrapper in the environment wrapper chain.
-
-    Args:
-        env: Gymnasium environment (possibly wrapped)
-
-    Returns:
-        NormalizeObservation wrapper if found, None otherwise
-    """
-    current = env
-    while current is not None:
-        if isinstance(current, NormalizeObservation):
-            return current
-        current = getattr(current, 'env', None)
-    return None
 
 
 def make_env(
@@ -29,15 +11,15 @@ def make_env(
     render_scale: float = 10.0,
     lap_complete_percent: float = 1.0,
     domain_randomize: bool = False,
-    normalize: bool = True
 ) -> gym.Env:
     """
     Create CarRacing-v3 environment with observation pipeline optimized for LSTM agent.
 
     Pipeline:
-        Raw (96x96x3) -> Crop (80x96x3) -> Normalize
+        Raw (96x96x3) -> Crop (80x96x3)
 
     No FrameStack - LSTM handles temporal information.
+    Pixel normalization (/255.0) is done in the CNN forward pass.
 
     Args:
         render_mode: "rgb_array" for headless, "human" for display
@@ -45,7 +27,6 @@ def make_env(
         render_scale: Scale factor for RenderObservation
         lap_complete_percent: Fraction of track to complete for episode end
         domain_randomize: Whether to randomize track appearance
-        normalize: Whether to apply NormalizeObservation (disable for inference)
 
     Returns:
         Configured Gymnasium environment
@@ -64,10 +45,6 @@ def make_env(
     #env = EdgeObservation(env, low_threshold=50, high_threshold=150)
     #env = ResizeObservation(env, (40, 48))
 
-    # Normalize observation using running mean/std
-    if normalize:
-        env = NormalizeObservation(env)
-
     # Optional visualization
     if render_observation:
         env = RenderObservation(env, scale=render_scale)
@@ -77,7 +54,7 @@ def make_env(
 
 def get_obs_shape() -> tuple[int, int, int]:
     """Return the observation shape after preprocessing (H, W, C)."""
-    env = make_env(render_mode="rgb_array", normalize=False)
+    env = make_env(render_mode="rgb_array")
     shape = env.observation_space.shape
     env.close()
     return shape
@@ -85,7 +62,7 @@ def get_obs_shape() -> tuple[int, int, int]:
 
 def get_num_actions() -> int:
     """Return the number of discrete actions."""
-    env = make_env(render_mode="rgb_array", normalize=False)
+    env = make_env(render_mode="rgb_array")
     n_actions = env.action_space.n
     env.close()
     return n_actions
@@ -94,7 +71,6 @@ def get_num_actions() -> int:
 def make_vec_env(
     num_envs: int = 8,
     render_mode: str = "rgb_array",
-    normalize: bool = True,
     **kwargs
 ) -> AsyncVectorEnv:
     """
@@ -103,13 +79,12 @@ def make_vec_env(
     Args:
         num_envs: Number of parallel environments
         render_mode: Rendering mode (use "rgb_array" for training)
-        normalize: Whether to apply observation normalization
         **kwargs: Additional arguments passed to make_env()
 
     Returns:
         AsyncVectorEnv with num_envs parallel environments (subprocess-based)
     """
     def _make_env():
-        return make_env(render_mode=render_mode, normalize=normalize, **kwargs)
+        return make_env(render_mode=render_mode, **kwargs)
 
     return AsyncVectorEnv([_make_env for _ in range(num_envs)])

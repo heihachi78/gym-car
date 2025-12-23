@@ -123,7 +123,7 @@ class LSTMPPOAgent:
         cls,
         path: str,
         device: str = "cuda"
-    ) -> tuple["LSTMPPOAgent", dict | None]:
+    ) -> "LSTMPPOAgent":
         """
         Load agent from checkpoint.
 
@@ -133,8 +133,6 @@ class LSTMPPOAgent:
 
         Returns:
             agent: Loaded LSTMPPOAgent
-            obs_rms: Observation normalization statistics dict or None if not present
-                     Contains 'mean', 'var', 'count' keys if present
         """
         checkpoint = torch.load(path, map_location=device, weights_only=False)
 
@@ -147,6 +145,4 @@ class LSTMPPOAgent:
         )
         agent.network.load_state_dict(checkpoint['network_state_dict'])
 
-        obs_rms = checkpoint.get('obs_rms', None)
-
-        return agent, obs_rms
+        return agent

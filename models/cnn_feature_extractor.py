@@ -10,7 +10,7 @@ class CNNFeatureExtractor(nn.Module):
     Output: (batch, output_size) - flattened feature vector
     """
 
-    def __init__(self, input_shape: tuple[int, int, int], output_size: int = 512):
+    def __init__(self, input_shape: tuple[int, int, int], output_size: int = 256):
         """
         Args:
             input_shape: (channels, height, width) e.g., (1, 80, 96)
@@ -21,7 +21,7 @@ class CNNFeatureExtractor(nn.Module):
         channels, H, W = input_shape
 
         self.conv = nn.Sequential(
-            # Conv1: input -> 64 channels (more filters for RGB color features)
+            # Conv1: input -> 64 channels
             nn.Conv2d(channels, 64, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
@@ -39,11 +39,11 @@ class CNNFeatureExtractor(nn.Module):
             nn.ReLU(),
             # Output: (256, 10, 12)
 
-            # Conv4: 256 -> 256 channels
-            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(256),
+            # Conv4: 256 -> 512 channels
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(512),
             nn.ReLU(),
-            # Output: (256, 5, 6)
+            # Output: (512, 10, 12)
 
             nn.Flatten(),
         )
@@ -77,11 +77,12 @@ class CNNFeatureExtractor(nn.Module):
         Forward pass.
 
         Args:
-            x: Input tensor of shape (batch, C, H, W)
+            x: Input tensor of shape (batch, C, H, W) with pixel values 0-255
 
         Returns:
             Feature tensor of shape (batch, output_size)
         """
+        x = x / 255.0  # Normalize pixels to [0, 1]
         x = self.conv(x)
         x = self.fc(x)
         return x

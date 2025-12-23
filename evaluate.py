@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 from agents import LSTMPPOAgent
-from utils import make_env, get_normalize_wrapper
+from utils import make_env
 
 
 def parse_args():
@@ -76,25 +76,13 @@ def main():
     device = args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu"
     print(f"Using device: {device}")
 
-    # Load agent and normalization statistics
+    # Load agent
     print(f"Loading checkpoint from {args.checkpoint}")
-    agent, obs_rms = LSTMPPOAgent.from_checkpoint(args.checkpoint, device=device)
+    agent = LSTMPPOAgent.from_checkpoint(args.checkpoint, device=device)
     agent.network.eval()  # Set to evaluation mode
 
     # Create environment (headless)
     env = make_env(render_mode="rgb_array")
-
-    # Restore normalization statistics from training
-    if obs_rms is not None:
-        norm_wrapper = get_normalize_wrapper(env)
-        if norm_wrapper is not None:
-            norm_wrapper.obs_rms.mean = obs_rms['mean']
-            norm_wrapper.obs_rms.var = obs_rms['var']
-            norm_wrapper.obs_rms.count = obs_rms['count']
-            norm_wrapper.update_running_mean = False  # Freeze during evaluation
-            print("Normalization statistics loaded!")
-    else:
-        print("Warning: No normalization statistics in checkpoint")
 
     print(f"\nEvaluating for {args.episodes} episodes...")
     print("-" * 50)

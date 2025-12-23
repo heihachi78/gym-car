@@ -24,7 +24,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train LSTM-PPO on CarRacing-v3")
 
     # Training parameters
-    parser.add_argument("--total-timesteps", type=int, default=15_000_000,
+    parser.add_argument("--total-timesteps", type=int, default=30_000_000,
                         help="Total timesteps to train")
     parser.add_argument("--num-envs", type=int, default=16,
                         help="Number of parallel environments")
@@ -32,13 +32,13 @@ def parse_args():
                         help="Steps per rollout per environment")
     parser.add_argument("--num-epochs", type=int, default=4,
                         help="PPO epochs per update")
-    parser.add_argument("--batch-size", type=int, default=64,
+    parser.add_argument("--batch-size", type=int, default=32,
                         help="Batch size (number of sequences)")
-    parser.add_argument("--seq-len", type=int, default=32,
+    parser.add_argument("--seq-len", type=int, default=64,
                         help="Sequence length for LSTM")
 
     # PPO hyperparameters
-    parser.add_argument("--learning-rate", type=float, default=2.5e-4)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
@@ -231,7 +231,7 @@ def main():
     start_step = 0
     if args.checkpoint:
         print(f"Loading checkpoint from {args.checkpoint}")
-        start_step = trainer.load_checkpoint(args.checkpoint, env=env)
+        start_step = trainer.load_checkpoint(args.checkpoint)
         print(f"Resuming from step {start_step}")
 
     # Create checkpoint directory
@@ -291,19 +291,19 @@ def main():
         # Save checkpoint
         if global_step % args.save_interval < steps_per_update:
             checkpoint_path = checkpoint_dir / f"model_{global_step}.pt"
-            trainer.save_checkpoint(str(checkpoint_path), global_step, all_episode_rewards, env=env)
+            trainer.save_checkpoint(str(checkpoint_path), global_step, all_episode_rewards)
             print(f"Saved checkpoint to {checkpoint_path}")
 
             # Also save as latest
             latest_path = checkpoint_dir / "model_latest.pt"
-            trainer.save_checkpoint(str(latest_path), global_step, all_episode_rewards, env=env)
+            trainer.save_checkpoint(str(latest_path), global_step, all_episode_rewards)
 
         # Reset buffer
         buffer.reset()
 
     # Final save
     final_path = checkpoint_dir / "model_final.pt"
-    trainer.save_checkpoint(str(final_path), global_step, all_episode_rewards, env=env)
+    trainer.save_checkpoint(str(final_path), global_step, all_episode_rewards)
     print(f"\nTraining complete! Final model saved to {final_path}")
 
     # Cleanup

@@ -4,10 +4,8 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 
-import gymnasium as gym
 from models import ActorCriticLSTM, LSTMState
 from .rollout_buffer import RolloutBuffer
-from utils import get_normalize_wrapper
 
 
 class PPOTrainer:
@@ -31,7 +29,7 @@ class PPOTrainer:
         entropy_coef: float = 0.01,
         max_grad_norm: float = 0.5,
         num_epochs: int = 4,
-        batch_size: int = 64,
+        batch_size: int = 32,
         seq_len: int = 16,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
@@ -196,9 +194,8 @@ class PPOTrainer:
         path: str,
         step: int,
         episode_rewards: list = None,
-        env: gym.Env = None
     ):
-        """Save training checkpoint including normalization statistics."""
+        """Save training checkpoint."""
         checkpoint = {
             'step': step,
             'network_state_dict': self.network.state_dict(),
@@ -211,32 +208,14 @@ class PPOTrainer:
         if episode_rewards:
             checkpoint['recent_rewards'] = episode_rewards[-100:]
 
-        # Save normalization statistics if env has NormalizeObservation wrapper
-        if env is not None:
-            norm_wrapper = get_normalize_wrapper(env)
-            if norm_wrapper is not None:
-                checkpoint['obs_rms'] = {
-                    'mean': norm_wrapper.obs_rms.mean,
-                    'var': norm_wrapper.obs_rms.var,
-                    'count': norm_wrapper.obs_rms.count,
-                }
-
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(checkpoint, path)
 
-    def load_checkpoint(self, path: str, env: gym.Env = None) -> int:
+    def load_checkpoint(self, path: str) -> int:
         """Load training checkpoint. Returns the step number."""
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         self.network.load_state_dict(checkpoint['network_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-        # Restore normalization statistics if available
-        if env is not None and 'obs_rms' in checkpoint:
-            norm_wrapper = get_normalize_wrapper(env)
-            if norm_wrapper is not None:
-                norm_wrapper.obs_rms.mean = checkpoint['obs_rms']['mean']
-                norm_wrapper.obs_rms.var = checkpoint['obs_rms']['var']
-                norm_wrapper.obs_rms.count = checkpoint['obs_rms']['count']
 
         return checkpoint['step']
 

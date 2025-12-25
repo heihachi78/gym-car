@@ -7,6 +7,10 @@ from pathlib import Path
 from models import ActorCriticLSTM, LSTMState
 from .rollout_buffer import RolloutBuffer
 
+# Checkpoint version for compatibility checking
+# Version 1: old single-layer arch, Version 2: new 2-layer arch
+CHECKPOINT_VERSION = 2
+
 
 class PPOTrainer:
     """
@@ -195,15 +199,18 @@ class PPOTrainer:
         step: int,
         episode_rewards: list = None,
     ):
-        """Save training checkpoint."""
+        """Save training checkpoint with version."""
         checkpoint = {
+            'version': CHECKPOINT_VERSION,
             'step': step,
             'network_state_dict': self.network.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'obs_shape': self.network.obs_shape,
-            'num_actions': self.network.num_actions,
-            'hidden_size': self.network.hidden_size,
-            'num_lstm_layers': self.network.num_lstm_layers,
+            'architecture': {
+                'obs_shape': self.network.obs_shape,
+                'num_actions': self.network.num_actions,
+                'hidden_size': self.network.hidden_size,
+                'num_lstm_layers': self.network.num_lstm_layers,
+            }
         }
         if episode_rewards:
             checkpoint['recent_rewards'] = episode_rewards[-100:]
@@ -212,10 +219,64 @@ class PPOTrainer:
         torch.save(checkpoint, path)
 
     def load_checkpoint(self, path: str) -> int:
-        """Load training checkpoint. Returns the step number."""
+        """
+        Load training checkpoint with architecture validation.
+
+        Returns:
+            step: Training step number
+
+        Raises:
+            ValueError: If checkpoint version or architecture is incompatible
+        """
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        self.network.load_state_dict(checkpoint['network_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+        # Check version compatibility
+        checkpoint_version = checkpoint.get('version', 1)  # Old checkpoints have no version
+        if checkpoint_version < CHECKPOINT_VERSION:
+            raise ValueError(
+                f"Incompatible checkpoint version {checkpoint_version}. "
+                f"Current version is {CHECKPOINT_VERSION}. "
+                f"The model architecture has changed significantly. "
+                f"Please start training from scratch."
+            )
+
+        # Validate architecture (if metadata exists)
+        if 'architecture' in checkpoint:
+            arch = checkpoint['architecture']
+
+            if arch['obs_shape'] != self.network.obs_shape:
+                raise ValueError(
+                    f"Observation shape mismatch: checkpoint={arch['obs_shape']}, "
+                    f"current={self.network.obs_shape}"
+                )
+
+            if arch['num_actions'] != self.network.num_actions:
+                raise ValueError(
+                    f"Action space mismatch: checkpoint={arch['num_actions']}, "
+                    f"current={self.network.num_actions}"
+                )
+
+            if arch['hidden_size'] != self.network.hidden_size:
+                raise ValueError(
+                    f"Hidden size mismatch: checkpoint={arch['hidden_size']}, "
+                    f"current={self.network.hidden_size}"
+                )
+
+            if arch['num_lstm_layers'] != self.network.num_lstm_layers:
+                raise ValueError(
+                    f"LSTM layers mismatch: checkpoint={arch['num_lstm_layers']}, "
+                    f"current={self.network.num_lstm_layers}"
+                )
+
+        # Load state dicts
+        try:
+            self.network.load_state_dict(checkpoint['network_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        except RuntimeError as e:
+            raise ValueError(
+                f"Failed to load checkpoint state dict. The network architecture "
+                f"may have changed. Error: {str(e)}"
+            ) from e
 
         return checkpoint['step']
 

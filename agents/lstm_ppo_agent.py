@@ -104,18 +104,32 @@ class LSTMPPOAgent:
         return self.network.get_initial_hidden(batch_size=1, device=self.device)
 
     def save(self, path: str):
-        """Save model weights."""
+        """Save model weights with version."""
+        CHECKPOINT_VERSION = 2  # Match trainer version
         torch.save({
+            'version': CHECKPOINT_VERSION,
             'network_state_dict': self.network.state_dict(),
-            'obs_shape': self.network.obs_shape,
-            'num_actions': self.network.num_actions,
-            'hidden_size': self.hidden_size,
-            'num_lstm_layers': self.num_lstm_layers,
+            'architecture': {
+                'obs_shape': self.network.obs_shape,
+                'num_actions': self.network.num_actions,
+                'hidden_size': self.hidden_size,
+                'num_lstm_layers': self.num_lstm_layers,
+            }
         }, path)
 
     def load(self, path: str):
-        """Load model weights."""
+        """Load model weights with validation."""
+        CHECKPOINT_VERSION = 2
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+
+        checkpoint_version = checkpoint.get('version', 1)
+        if checkpoint_version < CHECKPOINT_VERSION:
+            raise ValueError(
+                f"Incompatible checkpoint version {checkpoint_version}. "
+                f"Current version is {CHECKPOINT_VERSION}. "
+                f"Please use a checkpoint from the current architecture."
+            )
+
         self.network.load_state_dict(checkpoint['network_state_dict'])
 
     @classmethod
@@ -125,7 +139,7 @@ class LSTMPPOAgent:
         device: str = "cuda"
     ) -> "LSTMPPOAgent":
         """
-        Load agent from checkpoint.
+        Load agent from checkpoint with validation.
 
         Args:
             path: Path to checkpoint file
@@ -133,14 +147,40 @@ class LSTMPPOAgent:
 
         Returns:
             agent: Loaded LSTMPPOAgent
+
+        Raises:
+            ValueError: If checkpoint version is incompatible
         """
+        CHECKPOINT_VERSION = 2
         checkpoint = torch.load(path, map_location=device, weights_only=False)
 
+        checkpoint_version = checkpoint.get('version', 1)
+        if checkpoint_version < CHECKPOINT_VERSION:
+            raise ValueError(
+                f"Incompatible checkpoint version {checkpoint_version}. "
+                f"Current version is {CHECKPOINT_VERSION}. "
+                f"The model architecture has changed. Please train a new model."
+            )
+
+        # Extract architecture (support both old and new format)
+        if 'architecture' in checkpoint:
+            arch = checkpoint['architecture']
+            obs_shape = arch['obs_shape']
+            num_actions = arch['num_actions']
+            hidden_size = arch['hidden_size']
+            num_lstm_layers = arch['num_lstm_layers']
+        else:
+            # Old format (top-level keys) - though this shouldn't happen with version check
+            obs_shape = checkpoint['obs_shape']
+            num_actions = checkpoint['num_actions']
+            hidden_size = checkpoint['hidden_size']
+            num_lstm_layers = checkpoint['num_lstm_layers']
+
         agent = cls(
-            obs_shape=checkpoint['obs_shape'],
-            num_actions=checkpoint['num_actions'],
-            hidden_size=checkpoint['hidden_size'],
-            num_lstm_layers=checkpoint['num_lstm_layers'],
+            obs_shape=obs_shape,
+            num_actions=num_actions,
+            hidden_size=hidden_size,
+            num_lstm_layers=num_lstm_layers,
             device=device
         )
         agent.network.load_state_dict(checkpoint['network_state_dict'])

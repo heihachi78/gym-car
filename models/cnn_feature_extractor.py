@@ -10,7 +10,7 @@ class CNNFeatureExtractor(nn.Module):
     Output: (batch, output_size) - flattened feature vector
     """
 
-    def __init__(self, input_shape: tuple[int, int, int], output_size: int = 256):
+    def __init__(self, input_shape: tuple[int, int, int], output_size: int = 512):
         """
         Args:
             input_shape: (channels, height, width) e.g., (1, 80, 96)
@@ -25,7 +25,7 @@ class CNNFeatureExtractor(nn.Module):
             nn.Conv2d(channels, 64, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            # Output: (64, 40, 48)
+            # Output: (64, 40, 48) from input (3, 80, 96)
 
             # Conv2: 64 -> 128 channels
             nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
@@ -39,11 +39,11 @@ class CNNFeatureExtractor(nn.Module):
             nn.ReLU(),
             # Output: (256, 10, 12)
 
-            # Conv4: 256 -> 512 channels
-            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            # Conv3: 256 -> 512 channels
+            nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(512),
             nn.ReLU(),
-            # Output: (512, 10, 12)
+            # Output: (512, 5, 6)
 
             nn.Flatten(),
         )

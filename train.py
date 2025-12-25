@@ -32,13 +32,13 @@ def parse_args():
                         help="Steps per rollout per environment")
     parser.add_argument("--num-epochs", type=int, default=4,
                         help="PPO epochs per update")
-    parser.add_argument("--batch-size", type=int, default=32,
+    parser.add_argument("--batch-size", type=int, default=64,
                         help="Batch size (number of sequences)")
-    parser.add_argument("--seq-len", type=int, default=64,
+    parser.add_argument("--seq-len", type=int, default=32,
                         help="Sequence length for LSTM")
 
     # PPO hyperparameters
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
@@ -56,9 +56,9 @@ def parse_args():
 
     # Network parameters
     parser.add_argument("--hidden-size", type=int, default=512,
-                        help="LSTM hidden size")
-    parser.add_argument("--num-lstm-layers", type=int, default=1,
-                        help="Number of LSTM layers")
+                        help="LSTM hidden size (512 for 2-layer architecture)")
+    parser.add_argument("--num-lstm-layers", type=int, default=2,
+                        help="Number of LSTM layers (fixed at 2)")
 
     # Logging and checkpointing
     parser.add_argument("--log-dir", type=str, default="runs",

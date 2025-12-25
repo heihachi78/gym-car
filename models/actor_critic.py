@@ -21,7 +21,7 @@ class ActorCriticLSTM(nn.Module):
         self,
         obs_shape: tuple[int, int] | tuple[int, int, int],
         num_actions: int,
-        hidden_size: int = 256,
+        hidden_size: int = 512,
         num_lstm_layers: int = 1
     ):
         """
@@ -51,29 +51,29 @@ class ActorCriticLSTM(nn.Module):
         # CNN for spatial features
         self.cnn = CNNFeatureExtractor(
             input_shape=(C, H, W),
-            output_size=hidden_size
+            output_size=512  # Compact feature representation
         )
 
-        # LSTM for temporal processing
+        # LSTM for temporal processing (2 layers, 512 hidden units each)
         self.lstm = nn.LSTM(
-            input_size=hidden_size,
-            hidden_size=hidden_size,
-            num_layers=num_lstm_layers,
+            input_size=512,  # Match CNN output_size
+            hidden_size=512,
+            num_layers=2,
             batch_first=True
         )
 
-        # Actor head (policy) - separate hidden layer to decouple from critic
+        # Actor head (policy) - takes 512 from LSTM output
         self.actor = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Linear(hidden_size, num_actions)
+            nn.Linear(256, num_actions)
         )
 
-        # Critic head (value) - separate hidden layer to decouple from actor
+        # Critic head (value) - takes 512 from LSTM output
         self.critic = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Linear(hidden_size, 1)
+            nn.Linear(256, 1)
         )
 
         # Initialize actor and critic heads
@@ -123,22 +123,21 @@ class ActorCriticLSTM(nn.Module):
             batch_size, seq_len, H, W, C = obs.shape
             obs_flat = obs.permute(0, 1, 4, 2, 3).reshape(batch_size * seq_len, C, H, W)
 
-        # Extract features: (batch * seq_len, hidden_size)
+        # Extract features: (batch * seq_len, 512)
         features = self.cnn(obs_flat)
 
-        # Reshape for LSTM: (batch, seq_len, hidden_size)
+        # Reshape for LSTM: (batch, seq_len, 512)
         features = features.reshape(batch_size, seq_len, -1)
 
-        # LSTM forward
-        lstm_out, (h_new, c_new) = self.lstm(
-            features,
-            hidden_state.as_tuple()
-        )
+        # LSTM forward pass
+        # hidden_state.h and .c have shape (2, batch, 512)
+        lstm_out, (h_new, c_new) = self.lstm(features, hidden_state.as_tuple())
 
         # Actor and critic heads
-        policy_logits = self.actor(lstm_out)
-        values = self.critic(lstm_out)
+        policy_logits = self.actor(lstm_out)  # (batch, seq_len, num_actions)
+        values = self.critic(lstm_out)  # (batch, seq_len, 1)
 
+        # Update hidden state
         new_hidden = LSTMState(h=h_new, c=c_new)
 
         return policy_logits, values, new_hidden
@@ -148,16 +147,15 @@ class ActorCriticLSTM(nn.Module):
         batch_size: int,
         device: torch.device = None
     ) -> LSTMState:
-        """Return zero-initialized hidden state."""
+        """Return zero-initialized hidden state (num_layers=2, hidden_size=512)."""
         if device is None:
             device = next(self.parameters()).device
 
-        return LSTMState.zeros(
-            batch_size=batch_size,
-            hidden_size=self.hidden_size,
-            num_layers=self.num_lstm_layers,
-            device=device
-        )
+        # Shape: (num_layers, batch_size, hidden_size) = (2, batch, 512)
+        h = torch.zeros(self.num_lstm_layers, batch_size, self.hidden_size, device=device)
+        c = torch.zeros(self.num_lstm_layers, batch_size, self.hidden_size, device=device)
+
+        return LSTMState(h=h, c=c)
 
     def get_action_and_value(
         self,

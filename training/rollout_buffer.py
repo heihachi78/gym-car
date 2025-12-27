@@ -21,8 +21,9 @@ class RolloutBuffer:
         hidden_size: int,
         num_lstm_layers: int,
         device: torch.device,
-        gamma: float = 0.99,
-        gae_lambda: float = 0.95
+        gamma: float,
+        gae_lambda: float,
+        normalize_epsilon: float
     ):
         """
         Args:
@@ -34,6 +35,7 @@ class RolloutBuffer:
             device: Torch device
             gamma: Discount factor
             gae_lambda: GAE lambda parameter
+            normalize_epsilon: Epsilon for advantage normalization
         """
         self.buffer_size = buffer_size
         self.num_envs = num_envs
@@ -43,6 +45,7 @@ class RolloutBuffer:
         self.device = device
         self.gamma = gamma
         self.gae_lambda = gae_lambda
+        self.normalize_epsilon = normalize_epsilon
 
         # Storage arrays: (buffer_size, num_envs, ...)
         self.observations = np.zeros((buffer_size, num_envs, *obs_shape), dtype=np.float32)
@@ -225,7 +228,7 @@ class RolloutBuffer:
 
             # Normalize advantages
             adv_mean = batch_advantages.mean()
-            adv_std = batch_advantages.std() + 1e-8
+            adv_std = batch_advantages.std() + self.normalize_epsilon
             batch_advantages = (batch_advantages - adv_mean) / adv_std
 
             yield {

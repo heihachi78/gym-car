@@ -21,22 +21,25 @@ class ActorCriticLSTM(nn.Module):
         self,
         obs_shape: tuple[int, int] | tuple[int, int, int],
         num_actions: int,
-        hidden_size: int = 256,
-        num_lstm_layers: int = 1
+        config: dict
     ):
         """
         Args:
             obs_shape: (height, width) or (height, width, channels) of observation
             num_actions: Number of discrete actions
-            hidden_size: Size of LSTM hidden state and feature vectors
-            num_lstm_layers: Number of LSTM layers
+            config: Full configuration dict with cnn, lstm, actor_critic sections
         """
         super().__init__()
 
+        # Extract configs
+        cnn_config = config['cnn']
+        lstm_config = config['lstm']
+        ac_config = config['actor_critic']
+
         self.obs_shape = obs_shape
         self.num_actions = num_actions
-        self.hidden_size = hidden_size
-        self.num_lstm_layers = num_lstm_layers
+        self.hidden_size = lstm_config['hidden_size']
+        self.num_lstm_layers = lstm_config['num_layers']
 
         # Determine input channels
         if len(obs_shape) == 2:
@@ -47,50 +50,53 @@ class ActorCriticLSTM(nn.Module):
 
         self.input_channels = C
         self.spatial_shape = (H, W)
+        self.max_channel_count = ac_config['max_channel_count']
 
         # CNN for spatial features
         self.cnn = CNNFeatureExtractor(
             input_shape=(C, H, W),
-            output_size=hidden_size
+            cnn_config=cnn_config
         )
 
         # LSTM for temporal processing
         self.lstm = nn.LSTM(
-            input_size=hidden_size,
-            hidden_size=hidden_size,
-            num_layers=num_lstm_layers,
+            input_size=cnn_config['output_size'],
+            hidden_size=self.hidden_size,
+            num_layers=self.num_lstm_layers,
             batch_first=True
         )
 
         # Actor head (policy) - separate hidden layer to decouple from critic
+        actor_hidden = ac_config['actor_hidden_size']
         self.actor = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(self.hidden_size, actor_hidden),
             nn.ReLU(),
-            nn.Linear(hidden_size, num_actions)
+            nn.Linear(actor_hidden, num_actions)
         )
 
         # Critic head (value) - separate hidden layer to decouple from actor
+        critic_hidden = ac_config['critic_hidden_size']
         self.critic = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(self.hidden_size, critic_hidden),
             nn.ReLU(),
-            nn.Linear(hidden_size, 1)
+            nn.Linear(critic_hidden, 1)
         )
 
         # Initialize actor and critic heads
-        self._init_heads()
+        self._init_heads(ac_config)
 
-    def _init_heads(self):
+    def _init_heads(self, ac_config: dict):
         """Initialize actor/critic heads."""
         # Actor: hidden layer with ReLU gain, output layer with small gain
         nn.init.orthogonal_(self.actor[0].weight, gain=nn.init.calculate_gain('relu'))
         nn.init.zeros_(self.actor[0].bias)
-        nn.init.orthogonal_(self.actor[2].weight, gain=0.01)
+        nn.init.orthogonal_(self.actor[2].weight, gain=ac_config['actor_output_gain'])
         nn.init.zeros_(self.actor[2].bias)
 
         # Critic: hidden layer with ReLU gain, output layer with gain=1
         nn.init.orthogonal_(self.critic[0].weight, gain=nn.init.calculate_gain('relu'))
         nn.init.zeros_(self.critic[0].bias)
-        nn.init.orthogonal_(self.critic[2].weight, gain=1.0)
+        nn.init.orthogonal_(self.critic[2].weight, gain=ac_config['critic_output_gain'])
         nn.init.zeros_(self.critic[2].bias)
 
     def forward(
@@ -114,7 +120,7 @@ class ActorCriticLSTM(nn.Module):
             # Grayscale: (batch, seq_len, H, W) -> add channel dim
             batch_size, seq_len, H, W = obs.shape
             obs_flat = obs.reshape(batch_size * seq_len, 1, H, W)
-        elif obs.dim() == 5 and obs.shape[2] <= 4:
+        elif obs.dim() == 5 and obs.shape[2] <= self.max_channel_count:
             # Channel-first RGB: (batch, seq_len, C, H, W) - from train.py
             batch_size, seq_len, C, H, W = obs.shape
             obs_flat = obs.reshape(batch_size * seq_len, C, H, W)

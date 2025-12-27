@@ -18,13 +18,18 @@ import numpy as np
 from models import ActorCriticLSTM, LSTMState
 from training import RolloutBuffer, PPOTrainer
 from utils import make_env, make_vec_env, get_obs_shape, get_num_actions
+from config import ConfigLoader
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train LSTM-PPO on CarRacing-v3")
 
+    # Configuration
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to custom YAML/JSON config file")
+
     # Training parameters
-    parser.add_argument("--total-timesteps", type=int, default=30_000_000,
+    parser.add_argument("--total-timesteps", type=int, default=None,
                         help="Total timesteps to train")
     parser.add_argument("--num-envs", type=int, default=16,
                         help="Number of parallel environments")
@@ -174,18 +179,29 @@ def collect_rollout(env, network, buffer, num_steps, num_envs, device,
 def main():
     args = parse_args()
 
+    # Load configuration
+    config = ConfigLoader.load(args.config) if args.config else ConfigLoader.load()
+
+    # Apply CLI overrides
+    config = ConfigLoader.update_from_cli_args(config, args)
+
     # Setup device
     device = torch.device(
         args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu"
     )
     print(f"Using device: {device}")
 
+    # Extract config values
+    num_envs = config['training']['num_envs']
+    num_steps = config['training']['num_steps']
+    total_timesteps = config['training']['total_timesteps']
+
     # Create vectorized environment
-    env = make_vec_env(num_envs=args.num_envs, render_mode="rgb_array")
+    env = make_vec_env(num_envs=num_envs, render_mode="rgb_array")
     obs_shape = get_obs_shape()
     num_actions = get_num_actions()
 
-    print(f"Number of environments: {args.num_envs}")
+    print(f"Number of environments: {num_envs}")
     print(f"Observation shape: {obs_shape}")
     print(f"Number of actions: {num_actions}")
 
@@ -193,38 +209,28 @@ def main():
     network = ActorCriticLSTM(
         obs_shape=obs_shape,
         num_actions=num_actions,
-        hidden_size=args.hidden_size,
-        num_lstm_layers=args.num_lstm_layers
+        config=config
     ).to(device)
 
     # Create trainer
     trainer = PPOTrainer(
         network=network,
-        learning_rate=args.learning_rate,
-        adam_eps=args.adam_eps,
-        clip_epsilon=args.clip_epsilon,
-        value_coef=args.value_coef,
-        entropy_coef=args.entropy_coef,
-        max_grad_norm=args.max_grad_norm,
-        num_epochs=args.num_epochs,
-        batch_size=args.batch_size,
-        seq_len=args.seq_len,
-        gamma=args.gamma,
-        gae_lambda=args.gae_lambda,
+        ppo_config=config['ppo'],
         device=device,
         log_dir=args.log_dir
     )
 
     # Create rollout buffer
     buffer = RolloutBuffer(
-        buffer_size=args.num_steps,
-        num_envs=args.num_envs,
+        buffer_size=num_steps,
+        num_envs=num_envs,
         obs_shape=obs_shape,
-        hidden_size=args.hidden_size,
-        num_lstm_layers=args.num_lstm_layers,
+        hidden_size=config['lstm']['hidden_size'],
+        num_lstm_layers=config['lstm']['num_layers'],
         device=device,
-        gamma=args.gamma,
-        gae_lambda=args.gae_lambda
+        gamma=config['ppo']['gamma'],
+        gae_lambda=config['ppo']['gae_lambda'],
+        normalize_epsilon=config['ppo']['normalize_epsilon']
     )
 
     # Load checkpoint if provided
@@ -243,11 +249,11 @@ def main():
     global_step = start_step
     num_updates = 0
 
-    steps_per_update = args.num_steps * args.num_envs
-    print(f"\nStarting training for {args.total_timesteps} timesteps...")
-    print(f"Steps per rollout: {args.num_steps} x {args.num_envs} envs = {steps_per_update}")
-    print(f"Sequence length: {args.seq_len}")
-    print(f"Batch size: {args.batch_size}")
+    steps_per_update = num_steps * num_envs
+    print(f"\nStarting training for {total_timesteps} timesteps...")
+    print(f"Steps per rollout: {num_steps} x {num_envs} envs = {steps_per_update}")
+    print(f"Sequence length: {config['ppo']['seq_len']}")
+    print(f"Batch size: {config['ppo']['batch_size']}")
     print("-" * 50)
 
     # Persistent state across rollouts
@@ -255,10 +261,10 @@ def main():
     current_hidden = None
     current_ep_rewards = None
 
-    while global_step < args.total_timesteps:
+    while global_step < total_timesteps:
         # Collect rollout (state persists across calls)
         episode_rewards, current_obs, last_done, current_hidden, last_value, current_ep_rewards = collect_rollout(
-            env, network, buffer, args.num_steps, args.num_envs, device,
+            env, network, buffer, num_steps, num_envs, device,
             obs=current_obs, hidden=current_hidden, current_episode_rewards=current_ep_rewards
         )
         all_episode_rewards.extend(episode_rewards)
@@ -267,7 +273,7 @@ def main():
         buffer.compute_returns_and_advantages(last_value, last_done)
 
         # Update learning rate with linear decay
-        progress = global_step / args.total_timesteps
+        progress = global_step / total_timesteps
         trainer.update_learning_rate(progress)
 
         # PPO update
@@ -279,11 +285,12 @@ def main():
         trainer.log_training_stats(stats, episode_rewards, global_step)
 
         if episode_rewards:
-            recent_rewards = all_episode_rewards[-100:]
+            reward_window = config['training']['reward_window_size']
+            recent_rewards = all_episode_rewards[-reward_window:]
             print(
                 f"Step {global_step:>8} | "
                 f"Episodes: {len(all_episode_rewards):>5} | "
-                f"Mean reward (100): {sum(recent_rewards)/len(recent_rewards):>7.1f} | "
+                f"Mean reward ({reward_window}): {sum(recent_rewards)/len(recent_rewards):>7.1f} | "
                 f"Policy loss: {stats['policy_loss']:.4f} | "
                 f"Value loss: {stats['value_loss']:.4f}"
             )
@@ -291,19 +298,19 @@ def main():
         # Save checkpoint
         if global_step % args.save_interval < steps_per_update:
             checkpoint_path = checkpoint_dir / f"model_{global_step}.pt"
-            trainer.save_checkpoint(str(checkpoint_path), global_step, all_episode_rewards)
+            trainer.save_checkpoint(str(checkpoint_path), global_step, config, all_episode_rewards)
             print(f"Saved checkpoint to {checkpoint_path}")
 
             # Also save as latest
             latest_path = checkpoint_dir / "model_latest.pt"
-            trainer.save_checkpoint(str(latest_path), global_step, all_episode_rewards)
+            trainer.save_checkpoint(str(latest_path), global_step, config, all_episode_rewards)
 
         # Reset buffer
         buffer.reset()
 
     # Final save
     final_path = checkpoint_dir / "model_final.pt"
-    trainer.save_checkpoint(str(final_path), global_step, all_episode_rewards)
+    trainer.save_checkpoint(str(final_path), global_step, config, all_episode_rewards)
     print(f"\nTraining complete! Final model saved to {final_path}")
 
     # Cleanup

@@ -1,0 +1,83 @@
+# CNN Feature Extractor Configuration
+cnn:
+  # Layer 1
+  conv1_channels: 64
+  conv1_kernel: 4
+  conv1_stride: 2
+  conv1_padding: 1
+
+  # Layer 2
+  conv2_channels: 128
+  conv2_kernel: 4
+  conv2_stride: 2
+  conv2_padding: 1
+
+  # Layer 3
+  conv3_channels: 256
+  conv3_kernel: 3
+  conv3_stride: 2
+  conv3_padding: 1
+
+  # Layer 4
+  conv4_channels: 512
+  conv4_kernel: 3
+  conv4_stride: 1
+  conv4_padding: 1
+
+  # Output
+  output_size: 256
+
+  # Normalization
+  pixel_max_value: 255.0
+  init_gain: "relu"
+
+# LSTM Configuration
+lstm:
+  hidden_size: 512
+  num_layers: 1
+
+# Actor-Critic Network Configuration
+actor_critic:
+  # Actor head
+  actor_hidden_size: 512  # Currently shares with LSTM hidden_size
+  actor_output_gain: 0.01
+
+  # Critic head
+  critic_hidden_size: 512  # Currently shares with LSTM hidden_size
+  critic_output_gain: 1.0
+
+  # Input detection
+  max_channel_count: 4  # For channel-first detection heuristic
+
+# PPO Training Configuration
+ppo:
+  learning_rate: 0.00025  # 2.5e-4
+  adam_eps: 0.00001  # 1e-5
+  clip_epsilon: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.03
+  max_grad_norm: 0.5
+  num_epochs: 4
+  batch_size: 32
+  seq_len: 32
+  gamma: 0.99
+  gae_lambda: 0.95
+
+  # Numerical stability
+  normalize_epsilon: 0.00000001  # 1e-8
+  loss_epsilon: 0.00000001  # 1e-8
+
+# Training Loop Configuration
+training:
+  num_envs: 16
+  num_steps: 2048
+  total_timesteps: 2000000
+
+  # Metrics
+  reward_window_size: 100
+  num_recent_rewards: 100
+
+  # Environment
+  continuous_actions: false
+  lap_complete_percent: 1.0
+  domain_randomize: false

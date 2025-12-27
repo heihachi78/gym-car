@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from models import ActorCriticLSTM, LSTMState
+from config import ConfigLoader
 
 
 class LSTMPPOAgent:
@@ -15,29 +16,27 @@ class LSTMPPOAgent:
         self,
         obs_shape: tuple[int, int],
         num_actions: int,
-        hidden_size: int = 256,
-        num_lstm_layers: int = 1,
+        config: dict,
         device: str = "cuda"
     ):
         """
         Args:
             obs_shape: (height, width) of observation
             num_actions: Number of discrete actions
-            hidden_size: LSTM hidden size
-            num_lstm_layers: Number of LSTM layers
+            config: Full configuration dict
             device: Device to run on ("cuda" or "cpu")
         """
         self.device = torch.device(
             device if torch.cuda.is_available() and device == "cuda" else "cpu"
         )
-        self.hidden_size = hidden_size
-        self.num_lstm_layers = num_lstm_layers
+        self.config = config
+        self.hidden_size = config['lstm']['hidden_size']
+        self.num_lstm_layers = config['lstm']['num_layers']
 
         self.network = ActorCriticLSTM(
             obs_shape=obs_shape,
             num_actions=num_actions,
-            hidden_size=hidden_size,
-            num_lstm_layers=num_lstm_layers
+            config=config
         ).to(self.device)
 
     @torch.no_grad()
@@ -111,6 +110,7 @@ class LSTMPPOAgent:
             'num_actions': self.network.num_actions,
             'hidden_size': self.hidden_size,
             'num_lstm_layers': self.num_lstm_layers,
+            'config': self.config,
         }, path)
 
     def load(self, path: str):
@@ -136,11 +136,13 @@ class LSTMPPOAgent:
         """
         checkpoint = torch.load(path, map_location=device, weights_only=False)
 
+        # Load config from checkpoint or use default
+        config = checkpoint.get('config', ConfigLoader.load())
+
         agent = cls(
             obs_shape=checkpoint['obs_shape'],
             num_actions=checkpoint['num_actions'],
-            hidden_size=checkpoint['hidden_size'],
-            num_lstm_layers=checkpoint['num_lstm_layers'],
+            config=config,
             device=device
         )
         agent.network.load_state_dict(checkpoint['network_state_dict'])

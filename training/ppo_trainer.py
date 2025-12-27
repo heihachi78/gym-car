@@ -22,54 +22,42 @@ class PPOTrainer:
     def __init__(
         self,
         network: ActorCriticLSTM,
-        learning_rate: float = 3e-4,
-        adam_eps: float = 1e-5,
-        clip_epsilon: float = 0.2,
-        value_coef: float = 0.5,
-        entropy_coef: float = 0.01,
-        max_grad_norm: float = 0.5,
-        num_epochs: int = 4,
-        batch_size: int = 32,
-        seq_len: int = 16,
-        gamma: float = 0.99,
-        gae_lambda: float = 0.95,
+        ppo_config: dict,
         device: torch.device = None,
         log_dir: str = "runs"
     ):
         """
         Args:
             network: ActorCriticLSTM network
-            learning_rate: Learning rate for optimizer
-            adam_eps: Epsilon for Adam optimizer
-            clip_epsilon: PPO clipping parameter
-            value_coef: Value loss coefficient
-            entropy_coef: Entropy bonus coefficient
-            max_grad_norm: Maximum gradient norm for clipping
-            num_epochs: Number of PPO epochs per update
-            batch_size: Number of sequences per batch
-            seq_len: Sequence length for LSTM training
-            gamma: Discount factor
-            gae_lambda: GAE lambda
+            ppo_config: PPO configuration dict with all hyperparameters
             device: Torch device
             log_dir: Directory for TensorBoard logs
         """
         self.network = network
-        self.clip_epsilon = clip_epsilon
-        self.value_coef = value_coef
-        self.entropy_coef = entropy_coef
-        self.max_grad_norm = max_grad_norm
-        self.num_epochs = num_epochs
-        self.batch_size = batch_size
-        self.seq_len = seq_len
-        self.gamma = gamma
-        self.gae_lambda = gae_lambda
+        self.ppo_config = ppo_config
+
+        # Extract config values
+        self.clip_epsilon = ppo_config['clip_epsilon']
+        self.value_coef = ppo_config['value_coef']
+        self.entropy_coef = ppo_config['entropy_coef']
+        self.max_grad_norm = ppo_config['max_grad_norm']
+        self.num_epochs = ppo_config['num_epochs']
+        self.batch_size = ppo_config['batch_size']
+        self.seq_len = ppo_config['seq_len']
+        self.gamma = ppo_config['gamma']
+        self.gae_lambda = ppo_config['gae_lambda']
+        self.loss_epsilon = ppo_config['loss_epsilon']
 
         if device is None:
             device = next(network.parameters()).device
         self.device = device
 
-        self.optimizer = torch.optim.Adam(network.parameters(), lr=learning_rate, eps=adam_eps)
-        self.initial_lr = learning_rate
+        self.optimizer = torch.optim.Adam(
+            network.parameters(),
+            lr=ppo_config['learning_rate'],
+            eps=ppo_config['adam_eps']
+        )
+        self.initial_lr = ppo_config['learning_rate']
 
         # TensorBoard logging
         self.writer = SummaryWriter(log_dir)
@@ -116,7 +104,7 @@ class PPOTrainer:
                 policy_loss = torch.max(policy_loss_unclipped, policy_loss_clipped)
 
                 # Apply mask to exclude steps after episode end
-                policy_loss = (policy_loss * masks).sum() / (masks.sum() + 1e-8)
+                policy_loss = (policy_loss * masks).sum() / (masks.sum() + self.loss_epsilon)
 
                 # Value loss
                 value_loss = (values - returns) ** 2
@@ -124,10 +112,10 @@ class PPOTrainer:
                     values_clipped = old_values + torch.clamp(values - old_values, -self.clip_epsilon, self.clip_epsilon)
                     value_loss_clipped = (values_clipped - returns) ** 2
                     value_loss = torch.max(value_loss, value_loss_clipped)
-                value_loss = (value_loss * masks).sum() / (masks.sum() + 1e-8)
+                value_loss = (value_loss * masks).sum() / (masks.sum() + self.loss_epsilon)
 
                 # Entropy loss (we want to maximize entropy)
-                entropy_loss = -(entropy * masks).sum() / (masks.sum() + 1e-8)
+                entropy_loss = -(entropy * masks).sum() / (masks.sum() + self.loss_epsilon)
 
                 # Total loss
                 loss = (
@@ -193,6 +181,7 @@ class PPOTrainer:
         self,
         path: str,
         step: int,
+        config: dict,
         episode_rewards: list = None,
     ):
         """Save training checkpoint."""
@@ -204,9 +193,11 @@ class PPOTrainer:
             'num_actions': self.network.num_actions,
             'hidden_size': self.network.hidden_size,
             'num_lstm_layers': self.network.num_lstm_layers,
+            'config': config,  # Save full config
         }
         if episode_rewards:
-            checkpoint['recent_rewards'] = episode_rewards[-100:]
+            num_recent = self.ppo_config.get('num_recent_rewards', 100)
+            checkpoint['recent_rewards'] = episode_rewards[-num_recent:]
 
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(checkpoint, path)

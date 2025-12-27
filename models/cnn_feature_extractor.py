@@ -10,40 +10,61 @@ class CNNFeatureExtractor(nn.Module):
     Output: (batch, output_size) - flattened feature vector
     """
 
-    def __init__(self, input_shape: tuple[int, int, int], output_size: int = 256):
+    def __init__(self, input_shape: tuple[int, int, int], cnn_config: dict):
         """
         Args:
-            input_shape: (channels, height, width) e.g., (1, 80, 96)
-            output_size: Size of output feature vector
+            input_shape: (channels, height, width) e.g., (3, 96, 96)
+            cnn_config: CNN configuration dict with layer parameters
         """
         super().__init__()
 
         channels, H, W = input_shape
+        self.pixel_max_value = cnn_config['pixel_max_value']
 
         self.conv = nn.Sequential(
-            # Conv1: input -> 64 channels
-            nn.Conv2d(channels, 64, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(64),
+            # Conv1
+            nn.Conv2d(
+                channels,
+                cnn_config['conv1_channels'],
+                kernel_size=cnn_config['conv1_kernel'],
+                stride=cnn_config['conv1_stride'],
+                padding=cnn_config['conv1_padding']
+            ),
+            nn.BatchNorm2d(cnn_config['conv1_channels']),
             nn.ReLU(),
-            # Output: (64, 40, 48)
 
-            # Conv2: 64 -> 128 channels
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(128),
+            # Conv2
+            nn.Conv2d(
+                cnn_config['conv1_channels'],
+                cnn_config['conv2_channels'],
+                kernel_size=cnn_config['conv2_kernel'],
+                stride=cnn_config['conv2_stride'],
+                padding=cnn_config['conv2_padding']
+            ),
+            nn.BatchNorm2d(cnn_config['conv2_channels']),
             nn.ReLU(),
-            # Output: (128, 20, 24)
 
-            # Conv3: 128 -> 256 channels
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(256),
+            # Conv3
+            nn.Conv2d(
+                cnn_config['conv2_channels'],
+                cnn_config['conv3_channels'],
+                kernel_size=cnn_config['conv3_kernel'],
+                stride=cnn_config['conv3_stride'],
+                padding=cnn_config['conv3_padding']
+            ),
+            nn.BatchNorm2d(cnn_config['conv3_channels']),
             nn.ReLU(),
-            # Output: (256, 10, 12)
 
-            # Conv4: 256 -> 512 channels
-            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(512),
+            # Conv4
+            nn.Conv2d(
+                cnn_config['conv3_channels'],
+                cnn_config['conv4_channels'],
+                kernel_size=cnn_config['conv4_kernel'],
+                stride=cnn_config['conv4_stride'],
+                padding=cnn_config['conv4_padding']
+            ),
+            nn.BatchNorm2d(cnn_config['conv4_channels']),
             nn.ReLU(),
-            # Output: (512, 10, 12)
 
             nn.Flatten(),
         )
@@ -53,19 +74,20 @@ class CNNFeatureExtractor(nn.Module):
             dummy = torch.zeros(1, channels, H, W)
             flat_size = self.conv(dummy).shape[1]
 
+        output_size = cnn_config['output_size']
         self.fc = nn.Sequential(
             nn.Linear(flat_size, output_size),
             nn.ReLU()
         )
 
         # Initialize weights
-        self._init_weights()
+        self._init_weights(cnn_config['init_gain'])
 
-    def _init_weights(self):
+    def _init_weights(self, init_gain: str):
         """Initialize weights using orthogonal initialization."""
         for module in self.modules():
             if isinstance(module, (nn.Conv2d, nn.Linear)):
-                nn.init.orthogonal_(module.weight, gain=nn.init.calculate_gain('relu'))
+                nn.init.orthogonal_(module.weight, gain=nn.init.calculate_gain(init_gain))
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
             elif isinstance(module, nn.BatchNorm2d):
@@ -82,7 +104,7 @@ class CNNFeatureExtractor(nn.Module):
         Returns:
             Feature tensor of shape (batch, output_size)
         """
-        x = x / 255.0  # Normalize pixels to [0, 1]
+        x = x / self.pixel_max_value  # Normalize pixels to [0, 1]
         x = self.conv(x)
         x = self.fc(x)
         return x

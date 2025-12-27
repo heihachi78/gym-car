@@ -117,22 +117,29 @@ A nyers kép (96×96×3 RGB) feldolgozása segít a hatékonyabb tanulásban:
 ### Feldolgozási Pipeline
 
 ```
-Nyers kép (96×96×3 RGB)
-        │
-        ▼
-┌───────────────────┐
-│  CropObservation  │  Levágja a műszerfalat (alsó 16 sor)
-│    (80×96×3)      │
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│ NormalizeObserv.  │  Normalizálás (futó átlag és szórás)
-│    (80×96×3)      │
-└───────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  Nyers kép (96×96×3 RGB)                            │
+│           │                                          │
+│           ▼                                          │
+│  ┌─────────────────┐                                │
+│  │ CropObservation │  Műszerfal eltávolítása        │
+│  │   (80×96×3)     │  (alsó 16 sor levágása)        │
+│  └────────┬────────┘                                │
+│           │                                          │
+│           ▼                                          │
+│  ┌─────────────────┐                                │
+│  │  CNN Forward    │  Pixel normalizálás:           │
+│  │  x = x / 255.0  │  [0, 255] → [0, 1]             │
+│  └─────────────────┘                                │
+└─────────────────────────────────────────────────────┘
 ```
 
-**Megjegyzés:** A korábbi verziók használtak szürkeárnyalatos konverziót, élesítést és éldetektálást is. Ezek a wrapperek továbbra is elérhetők a `wrappers/` mappában, de a jelenlegi konfiguráció RGB képekkel dolgozik, mert a színinformáció (zöld fű vs. szürke pálya) hasznos a tanuláshoz.
+**Fontos különbségek a korábbi verziókhoz képest:**
+- **RGB képek** (3 csatorna) → színinformáció megmarad (zöld fű vs. szürke pálya)
+- **Nincs NormalizeObservation wrapper** → egyszerűbb architektúra
+- **Nincs grayscale konverzió** → több információ
+- **Nincs éldetektálás vagy élesítés aktívan** (de elérhetők)
+- **Normalizálás a CNN-ben történik**, nem külön wrapper-ben
 
 ### Wrapper-ek Részletesen
 
@@ -161,110 +168,54 @@ class CropObservation(ObservationWrapper):
 └────────────────────┘
 ```
 
-#### 2. NormalizeObservation (Gymnasium beépített)
+#### 2. Pixel Normalizálás (CNN-ben)
 
-**Cél:** Normalizálja a megfigyeléseket 0 átlagra és 1 szórásra
-
-```python
-# Belső működés (egyszerűsítve):
-normalized = (observation - running_mean) / running_std
-```
-
-**Miért fontos?**
-- A neurális hálózatok jobban tanulnak normalizált inputtal
-- Stabilizálja a gradiens flow-t
-- Gyorsabb konvergencia
-
-##### Normalizációs Statisztikák Mentése és Betöltése
-
-A `NormalizeObservation` wrapper **futó statisztikákat** (running mean/std) használ, amelyek a tanítás során frissülnek. Ezeket a statisztikákat el kell menteni a checkpoint-tal együtt, különben az inferenciánál a modell rosszul fog működni!
-
-**A probléma:**
-```
-Tanítás közben:     obs_rms.mean ≈ 0.15,  obs_rms.var ≈ 0.08
-Új környezetben:    obs_rms.mean = 0.0,   obs_rms.var = 1.0  ← ROSSZ!
-```
-
-Ha nem mentjük/töltjük be a statisztikákat, a modell teljesen más normalizált értékeket kap, mint amikre tanítva lett.
-
-**Megoldás: Statisztikák mentése checkpoint-ba** (`training/ppo_trainer.py`):
+A korábbi verziókkal ellentétben **NEM** használunk `NormalizeObservation` wrapper-t. Ehelyett egyszerű pixel normalizálás történik a CNN forward pass elején:
 
 ```python
-def save_checkpoint(self, path: str, step: int, episode_rewards=None, env=None):
-    checkpoint = {
-        'step': step,
-        'network_state_dict': self.network.state_dict(),
-        # ...
-    }
-
-    # Normalizációs statisztikák mentése
-    if env is not None:
-        norm_wrapper = get_normalize_wrapper(env)
-        if norm_wrapper is not None:
-            checkpoint['obs_rms'] = {
-                'mean': norm_wrapper.obs_rms.mean,
-                'var': norm_wrapper.obs_rms.var,
-                'count': norm_wrapper.obs_rms.count,
-            }
-
-    torch.save(checkpoint, path)
+# models/cnn_feature_extractor.py, forward() metódus
+def forward(self, x: torch.Tensor) -> torch.Tensor:
+    x = x / 255.0  # [0, 255] → [0, 1]
+    x = self.conv(x)
+    x = self.fc(x)
+    return x
 ```
 
-**Statisztikák betöltése inferenciánál** (`main.py`):
+**Miért jobb ez a NormalizeObservation wrapper-nél?**
 
+| NormalizeObservation (régi) | CNN normalizálás (jelenlegi) |
+|----------------------------|------------------------------|
+| Running mean/variance számítás | Egyszerű osztás 255.0-val |
+| obs_rms state mentése kell | Nincs state |
+| Checkpoint-ban tárolni kell | Determinisztikus |
+| Inferenciánál betölteni kell | Mindig ugyanaz |
+| Hibalehetőség: state mismatch | Nincs hibalehetőség |
+
+A `BatchNorm` rétegek a CNN-ben adaptívan normalizálnak, így nincs szükség külön observation normalizációra.
+
+#### 3. Opcionális Wrapperek (jelenleg kikapcsolva)
+
+A `wrappers/` mappában találhatók további képfeldolgozó wrapperek, amelyek **NINCSENEK HASZNÁLATBAN**, de könnyen bekapcsolhatók kísérletezéshez:
+
+**SharpenObservation** (`wrappers/sharpen_observation.py`):
+- Konvolúciós kernel-lel élesíti a képet
+- Paraméter: `strength` (1.0 alapértelmezett)
+- Miért kikapcsolva: A CNN BatchNorm elég jó ehhez
+
+**EdgeObservation** (`wrappers/edge_observation.py`):
+- Canny éldetektálás
+- Paraméterek: `low_threshold=50`, `high_threshold=150`
+- Kimenet: Bináris élkép (0 vagy 255)
+- Miért kikapcsolva: Elveszítené a színinformációt
+
+**Bekapcsolás** (`utils/env_factory.py`):
 ```python
-# Checkpoint betöltése
-checkpoint = torch.load(checkpoint_path)
-
-# Normalizációs statisztikák visszaállítása
-if 'obs_rms' in checkpoint:
-    norm_wrapper = get_normalize_wrapper(env)
-    if norm_wrapper is not None:
-        norm_wrapper.obs_rms.mean = checkpoint['obs_rms']['mean']
-        norm_wrapper.obs_rms.var = checkpoint['obs_rms']['var']
-        norm_wrapper.obs_rms.count = checkpoint['obs_rms']['count']
-        norm_wrapper.update_running_mean = False  # Fagyasztás inferenciánál!
+env = CropObservation(env, height=80, width=96)
+env = SharpenObservation(env, strength=1)  # ← Uncomment
+env = EdgeObservation(env, low_threshold=50, high_threshold=150)  # ← Uncomment
 ```
 
-**`update_running_mean = False` fontossága:**
-
-Inferenciánál nem akarjuk, hogy a statisztikák frissüljenek:
-- A modell a tanításkori statisztikákra lett optimalizálva
-- Ha folyamatosan frissülnének, az változtatná a normalizált értékeket
-- Ez instabil viselkedést eredményezne
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│           Normalizációs Statisztikák Életciklusa                │
-│                                                                 │
-│   TANÍTÁS                         INFERENCIA                    │
-│   ┌──────────────────┐           ┌──────────────────┐          │
-│   │ obs_rms frissül  │    ──>    │ obs_rms FAGYASZTVA│          │
-│   │ minden step-nél  │  MENTÉS   │ nem változik      │          │
-│   └──────────────────┘           └──────────────────┘          │
-│          │                              ▲                       │
-│          ▼                              │                       │
-│   ┌──────────────────┐           ┌──────────────────┐          │
-│   │   Checkpoint     │    ──>    │   Checkpoint     │          │
-│   │   + obs_rms      │  BETÖLTÉS │   + obs_rms      │          │
-│   └──────────────────┘           └──────────────────┘          │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Helper függvény a wrapper megtalálásához** (`utils/env_factory.py`):
-
-```python
-def get_normalize_wrapper(env: gym.Env) -> NormalizeObservation | None:
-    """
-    Megkeresi a NormalizeObservation wrapper-t a wrapper láncban.
-    """
-    current = env
-    while current is not None:
-        if isinstance(current, NormalizeObservation):
-            return current
-        current = getattr(current, 'env', None)
-    return None
-```
+**FIGYELEM:** `EdgeObservation` szürkeárnyalatos kimenetet ad → módosítani kell a CNN input channel-t (3→1) és újra kell tanítani a modellt!
 
 ---
 
@@ -334,21 +285,30 @@ class CNNFeatureExtractor(nn.Module):
             nn.ReLU(),
             # Input: (128, 20, 24) → Output: (256, 10, 12)
 
-            # Conv4: 256 → 256 csatorna
-            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(256),
+            # Conv4: 256 → 512 csatorna
+            nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(512),
             nn.ReLU(),
-            # Input: (256, 10, 12) → Output: (256, 5, 6)
+            # Input: (256, 10, 12) → Output: (512, 5, 6)
 
             nn.Flatten(),
-            # Output: 256 × 5 × 6 = 7680
+            # Output: 512 × 5 × 6 = 15,360
         )
 
+        # Fully connected layer (méret dinamikusan számítva)
         self.fc = nn.Sequential(
-            nn.Linear(7680, 512),  # Dinamikusan számított
+            nn.Linear(15360, 512),
             nn.ReLU()
         )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x / 255.0  # Pixel normalizálás [0,255] → [0,1]
+        x = self.conv(x)
+        x = self.fc(x)
+        return x
 ```
+
+**Teljes csatorna architektúra:** 3 (RGB) → 64 → 128 → 256 → **512** → Flatten → 512 features
 
 **BatchNorm előnyei:**
 - Stabilizálja a tanulást a belső covariate shift csökkentésével
@@ -376,6 +336,27 @@ Input kép (3, 80, 96)           Kernel (4×4)
 
 Az **LSTM (Long Short-Term Memory)** egy rekurrens neurális hálózat, amely "emlékszik" a korábbi lépésekre.
 
+**KRITIKUS: 2-rétegű LSTM architektúra**
+
+A jelenlegi implementáció **2 rétegű LSTM**-et használ (nem 1-et):
+
+```python
+# models/actor_critic.py, lines 58-62
+self.lstm = nn.LSTM(
+    input_size=512,
+    hidden_size=512,
+    num_layers=2,  # ← HARDCODED! Nem módosítható!
+    batch_first=True
+)
+```
+
+**FIGYELEM:** A `num_layers=2` **hardcoded** a kódban. A `train.py` `--num-lstm-layers` argumentuma csak látszólagos - a hálózat MINDIG 2 réteget használ.
+
+**2 réteg előnyei:**
+- **Gazdagabb reprezentációk**: Az alsó réteg alacsony szintű mintákat (pl. élek, alakzatok) tanul
+- **Hierarchikus tanulás**: A felső réteg magas szintű absztrakciókat (pl. kanyar típus, sebesség) tanul
+- **Jobb teljesítmény**: Komplex feladatoknál, mint az autóvezetés, a többrétegű LSTM lényegesen jobban teljesít
+
 **Miért kell LSTM autóvezetéshez?**
 
 Az autóvezetés **szekvenciális döntések** sorozata:
@@ -385,22 +366,27 @@ Az autóvezetés **szekvenciális döntések** sorozata:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    LSTM Működése                            │
+│              2-rétegű LSTM Működése (időbeli)               │
 │                                                             │
-│  Időpont:    t-2       t-1        t        t+1             │
-│              │         │          │         │               │
-│              ▼         ▼          ▼         ▼               │
-│           ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐            │
-│  Input:   │kép_1│   │kép_2│   │kép_3│   │kép_4│            │
-│           └──┬──┘   └──┬──┘   └──┬──┘   └──┬──┘            │
-│              │         │          │         │               │
-│              ▼         ▼          ▼         ▼               │
-│           ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐            │
-│  LSTM:    │cell │──>│cell │──>│cell │──>│cell │            │
-│           └──┬──┘   └──┬──┘   └──┬──┘   └──┬──┘            │
-│              │         │          │         │               │
-│  Hidden:   h_1───────>h_2───────>h_3───────>h_4            │
-│           (memória átadása időben)                          │
+│  t-2        t-1         t         t+1                       │
+│   │          │          │          │                        │
+│   ▼          ▼          ▼          ▼                        │
+│ ┌────┐    ┌────┐    ┌────┐    ┌────┐                       │
+│ │CNN │    │CNN │    │CNN │    │CNN │  (512 features)       │
+│ └─┬──┘    └─┬──┘    └─┬──┘    └─┬──┘                       │
+│   │          │          │          │                        │
+│   ▼          ▼          ▼          ▼                        │
+│ ┌────┐    ┌────┐    ┌────┐    ┌────┐                       │
+│ │LST1│───>│LST1│───>│LST1│───>│LST1│  LSTM Layer 1 (512)   │
+│ └─┬──┘    └─┬──┘    └─┬──┘    └─┬──┘                       │
+│   │          │          │          │                        │
+│   ▼          ▼          ▼          ▼                        │
+│ ┌────┐    ┌────┐    ┌────┐    ┌────┐                       │
+│ │LST2│───>│LST2│───>│LST2│───>│LST2│  LSTM Layer 2 (512)   │
+│ └─┬──┘    └─┬──┘    └─┬──┘    └─┬──┘                       │
+│   │          │          │          │                        │
+│   └──────────┴──────────┴──────────┘                        │
+│            Actor/Critic Heads                               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -433,11 +419,18 @@ h_t = o_t * tanh(c_t)
 ```python
 @dataclass
 class LSTMState:
-    """LSTM rejtett állapot tárolása"""
+    """LSTM rejtett állapot tárolása (2 réteghez)"""
     h: torch.Tensor  # Hidden state (rövid távú memória)
     c: torch.Tensor  # Cell state (hosszú távú memória)
 
-    # Shape: (num_layers, batch_size, hidden_size)
+    # Shape: (2, batch_size, 512)
+    # ├─ 2: LSTM layers (HARDCODED)
+    # ├─ batch_size: Párhuzamos környezetek száma
+    # └─ 512: Hidden size
+
+    def as_tuple(self):
+        """PyTorch LSTM formátumhoz (h, c) tuple"""
+        return (self.h, self.c)
 ```
 
 ### Actor és Critic Fejek
@@ -446,19 +439,19 @@ A jelenlegi implementáció **külön MLP fejeket** használ az actor és critic
 
 ```python
 # Actor: Politika kimenet (melyik akciót válasszuk)
-# 2 rétegű MLP: 512 → 512 → 5
+# 2 rétegű MLP: 512 → 256 → 5
 self.actor = nn.Sequential(
-    nn.Linear(hidden_size, hidden_size),  # 512 → 512
+    nn.Linear(512, 256),        # Projection to smaller space
     nn.ReLU(),
-    nn.Linear(hidden_size, num_actions)   # 512 → 5
+    nn.Linear(256, num_actions) # 256 → 5 actions
 )
 
 # Critic: Érték becslés (mennyire jó ez az állapot)
-# 2 rétegű MLP: 512 → 512 → 1
+# 2 rétegű MLP: 512 → 256 → 1
 self.critic = nn.Sequential(
-    nn.Linear(hidden_size, hidden_size),  # 512 → 512
+    nn.Linear(512, 256),  # Same projection
     nn.ReLU(),
-    nn.Linear(hidden_size, 1)             # 512 → 1
+    nn.Linear(256, 1)     # Value estimate
 )
 ```
 
@@ -466,6 +459,13 @@ self.critic = nn.Sequential(
 - Az actor és critic különböző célokra optimalizálnak
 - A közös LSTM reprezentáció felett külön "szakértő" rétegek tanulnak
 - Csökkenti az interferenciát a policy és value tanulás között
+
+**Miért 256-os köztes réteg (nem 512)?**
+- **Kevesebb paraméter**: 512×256 + 256×5 = 132,352 vs 512×512 + 512×5 = 264,704
+- **Regularizáció**: Kisebb hálózat → kevesebb overfitting
+- **Bottleneck**: Az 512→256 szűkítés információ-kompresszió, ami hasznos lehet
+- **Specializáció**: Actor és Critic különböző célokra optimalizál, nincs szükség teljes 512-es reprezentációra
+- **Sebesség**: Gyorsabb forward pass, kisebb memóriahasználat
 
 **Actor kimenet feldolgozása:**
 
@@ -918,9 +918,11 @@ class RolloutBuffer:
         self.returns = np.zeros((buffer_size, num_envs))
 ```
 
-**Adatméret:**
+**Adatméret (RGB képek, 2-rétegű LSTM):**
 - Megfigyelések: 2048 × 16 × 80 × 96 × 3 = ~754 MB (float32)
-- Összes adat egy rollout-ban: ~1 GB
+- Hidden states (2 layers, h+c): 2048 × 2 × 16 × 512 × 2 = ~134 MB (float32)
+- Actions, rewards, dones, log_probs, values: ~100 MB
+- **Összesen: ~1 GB / rollout**
 
 ### Batch Generálás Szekvenciákkal
 
@@ -986,7 +988,7 @@ def main():
     # 1. Inicializálás
     env = make_vec_env(num_envs=16, render_mode="rgb_array")
     network = ActorCriticLSTM(obs_shape=(80, 96, 3), num_actions=5, hidden_size=512)
-    trainer = PPOTrainer(network, learning_rate=2.5e-4, entropy_coef=0.03, ...)
+    trainer = PPOTrainer(network, learning_rate=3e-4, entropy_coef=0.03, ...)
     buffer = RolloutBuffer(buffer_size=2048, num_envs=16, obs_shape=(80, 96, 3), ...)
 
     # Perzisztens állapot rollout-ok között
@@ -998,7 +1000,7 @@ def main():
     global_step = 0
     steps_per_update = 2048 * 16  # 32768
 
-    while global_step < 15_000_000:  # 15 millió lépés
+    while global_step < 30_000_000:  # 30 millió lépés (default)
 
         # 3. Rollout gyűjtés (2048 × 16 = 32768 lépés)
         episode_rewards, current_obs, last_done, current_hidden, last_value, current_ep_rewards = collect_rollout(
@@ -1010,7 +1012,7 @@ def main():
         buffer.compute_returns_and_advantages(last_value, last_done)
 
         # 5. Learning rate decay
-        progress = global_step / 15_000_000
+        progress = global_step / 30_000_000
         trainer.update_learning_rate(progress)  # Lineáris decay
 
         # 6. PPO frissítés (4 epoch × 16 batch = 64 update)
@@ -1021,7 +1023,8 @@ def main():
         trainer.log_training_stats(stats, episode_rewards, global_step)
 
         if global_step % 250000 < steps_per_update:
-            trainer.save_checkpoint(f"model_{global_step}.pt", step=global_step, env=env)
+            # MEGJEGYZÉS: Nincs env paraméter - nem kell obs_rms mentés!
+            trainer.save_checkpoint(str(checkpoint_path), global_step, all_episode_rewards)
 
         # 8. Buffer reset
         buffer.reset()
@@ -1098,11 +1101,11 @@ gym-car/
 │
 ├── utils/                  # Segédfüggvények
 │   ├── __init__.py
-│   └── env_factory.py      # make_env(), make_vec_env(), get_normalize_wrapper()
+│   └── env_factory.py      # make_env(), make_vec_env(), get_obs_shape(), get_num_actions()
 │
 ├── checkpoints/            # Mentett modellek
-│   ├── model_latest.pt     # Legújabb checkpoint (obs_rms-sel)
-│   ├── model_XXXXXX.pt     # Periodikus checkpointok
+│   ├── model_latest.pt     # Legújabb checkpoint (Version 2)
+│   ├── model_XXXXXX.pt     # Periodikus checkpointok (250k lépésenként)
 │   └── model_final.pt      # Végleges modell
 │
 └── runs/                   # TensorBoard logok
@@ -1153,14 +1156,14 @@ gym-car/
 | Paraméter | Érték | Leírás |
 |-----------|-------|--------|
 | **Tanítás** |
-| `total_timesteps` | 15,000,000 | Összes tanítási lépés |
+| `total_timesteps` | 30,000,000 | Összes tanítási lépés (default) |
 | `num_envs` | 16 | Párhuzamos környezetek száma |
 | `num_steps` | 2,048 | Lépések rollout-onként (per env) |
 | `num_epochs` | 4 | PPO epoch-ok frissítésenként |
 | `batch_size` | 64 | Szekvenciák batch-enként |
 | `seq_len` | 32 | Szekvencia hossz (LSTM) |
 | **PPO** |
-| `learning_rate` | 2.5e-4 | Tanulási ráta (Adam, lineáris decay) |
+| `learning_rate` | 3e-4 | Tanulási ráta (Adam, lineáris decay) |
 | `adam_eps` | 1e-5 | Adam optimizer epsilon |
 | `gamma` | 0.99 | Diszkont faktor |
 | `gae_lambda` | 0.95 | GAE lambda |
@@ -1170,10 +1173,12 @@ gym-car/
 | `max_grad_norm` | 0.5 | Gradiens clipping |
 | **Hálózat** |
 | `hidden_size` | 512 | LSTM és CNN feature méret |
-| `num_lstm_layers` | 1 | LSTM rétegek száma |
+| `num_lstm_layers` | 2 | LSTM rétegek száma (HARDCODED!) |
 | **Megfigyelés** |
 | `obs_shape` | (80, 96, 3) | Feldolgozott kép méret (RGB) |
 | `crop_height` | 80 | Vágott magasság |
+
+**FIGYELEM:** A `num_lstm_layers` paraméter bár létezik a `train.py`-ban, a tényleges hálózat architektúra **HARDCODED 2 rétegre**. A parancssori argumentum figyelmen kívül marad!
 
 ### Paraméter Hangolási Tippek
 
@@ -1268,12 +1273,12 @@ Figyeld ezeket a metrikákat:
 
 ### Q: Mennyi ideig tart a tanítás?
 
-**A:** Hardvertől függően (16 párhuzamos környezettel):
-- **GPU (RTX 3080):** ~4-6 óra 15M lépésre
-- **GPU (RTX 4090):** ~2-3 óra 15M lépésre
+**A:** Hardvertől függően (16 párhuzamos környezettel, 30M lépés):
+- **GPU (RTX 3080):** ~8-12 óra 30M lépésre
+- **GPU (RTX 4090):** ~4-6 óra 30M lépésre
 - **CPU:** Nem ajánlott (nagyon lassú)
 
-A legtöbb javulás az első 5M lépésben történik. A vektorizált környezetek jelentősen felgyorsítják a tanítást.
+A legtöbb javulás az első 10M lépésben történik. A vektorizált környezetek jelentősen felgyorsítják a tanítást.
 
 ### Q: Hogyan használhatom a betanított modellt?
 
@@ -1295,31 +1300,58 @@ python evaluate.py --checkpoint checkpoints/model_latest.pt --episodes 10
 
 ### Q: A modell jól tanult, de inferenciánál rosszul teljesít. Miért?
 
-**A:** Valószínűleg a **normalizációs statisztikák** nincsenek megfelelően betöltve.
+**A:** Lehetséges okok (a normalizáció NEM probléma):
 
-A `NormalizeObservation` wrapper futó átlagot és szórást használ, amelyek a tanítás alatt frissülnek. Ha ezeket nem mentjük/töltjük be a checkpoint-tal:
+1. **Környezet konfiguráció különbség**:
+   - Ugyanazokat a wrappereket használd inferenciánál, mint tanításnál
+   - Ellenőrizd az `env_factory.py` beállításait (crop, wrapperek)
+   - Ha a tanításhoz más wrapper volt aktív (pl. EdgeObservation), azt inferenciánál is használd
 
-| Tanítás | Inferencia (rossz) | Inferencia (helyes) |
-|---------|-------------------|---------------------|
-| mean ≈ 0.15 | mean = 0.0 | mean ≈ 0.15 |
-| var ≈ 0.08 | var = 1.0 | var ≈ 0.08 |
+2. **Checkpoint verzió inkompatibilitás**:
+   - A régi (Version 1) checkpoint-ok nem kompatibilisek az új (Version 2) architektúrával
+   - Üzenet: "Incompatible checkpoint version" vagy "Architecture mismatch"
+   - Megoldás: Újra kell tanítani az új architektúrával
 
-**Megoldás:**
-A jelenlegi implementáció automatikusan menti az `obs_rms` statisztikákat a checkpoint-ba. A `main.py` és `evaluate.py` szkriptek helyesen betöltik és fagyasztják ezeket.
+3. **Determinisztikus vs. sztochasztikus policy**:
+   - Tanításnál: sztochasztikus mintavételezés (exploration)
+   - Inferenciánál: használd `deterministic=True`-t a jobb teljesítményhez
 
 ```python
-# main.py - Normalizációs statisztikák betöltése
-agent, obs_rms = LSTMPPOAgent.from_checkpoint(checkpoint_path, device=device)
-
-if obs_rms is not None:
-    norm_wrapper = get_normalize_wrapper(env)
-    norm_wrapper.obs_rms.mean = obs_rms['mean']
-    norm_wrapper.obs_rms.var = obs_rms['var']
-    norm_wrapper.obs_rms.count = obs_rms['count']
-    norm_wrapper.update_running_mean = False  # Fagyasztás!
+# agents/lstm_ppo_agent.py
+action, _, _ = self.network.get_action_and_value(
+    obs_tensor, self.hidden, deterministic=True  # Greedy policy
+)
 ```
 
-Ha régi checkpoint-ot használsz, ami nem tartalmazza az `obs_rms`-t, újra kell tanítani.
+4. **Hidden state nem resetelődik**:
+   - Minden új epizód elején: `agent.reset_hidden()`
+   - Az LSTM memória korábbi epizódokból interferálhat
+
+**MEGJEGYZÉS:** A korábbi verziókkal ellentétben NEM kell normalizációs statisztikákat (obs_rms) kezelni, mert a pixel normalizálás (/255.0) a CNN-ben determinisztikus!
+
+### Q: Miért változott a NormalizeObservation → CNN normalizálás?
+
+**A:** A korábbi verziók running mean/variance normalizációt használtak, ami több problémát okozott:
+
+**Problémák a NormalizeObservation-nel:**
+- **State management komplexitás**: mean, var, count mentése checkpoint-ba
+- **Inferenciánál KRITIKUS**: A helyes state betöltés kritikus - ha elrontod → teljes teljesítmény összeomlás
+- **Debuggolási nehézségek**: State mismatch, freezing problémák, nehéz hibakeresés
+- **Több kód, több hiba lehetőség**: obs_rms kezelés, get_normalize_wrapper, stb.
+- **Nem determinisztikus**: A statisztikák a tanítás során változnak
+
+**Jelenlegi megoldás (x / 255.0):**
+- **Determinisztikus és egyszerű**: Mindig ugyanaz, nincs state
+- **Nincs checkpoint függőség**: Nem kell state-et menteni/betölteni
+- **BatchNorm a CNN-ben**: Adaptívan normalizál, ha szükséges
+- **Ugyanolyan jó teljesítmény**: A gyakorlatban nincs különbség
+- **Robusztusabb**: Kevesebb hiba lehetőség, egyszerűbb debug
+
+**Ha mégis kellene running stats:**
+A `gymnasium.wrappers.NormalizeObservation` továbbra is elérhető. Ha használni akarod:
+1. Uncomment az `env_factory.py`-ban
+2. Implementáld az obs_rms checkpoint kezelést (lásd korábbi verziók)
+3. Teszteld alaposan az inferenciát!
 
 ---
 

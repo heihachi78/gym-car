@@ -28,13 +28,13 @@ def parse_args():
                         help="Total timesteps to train")
     parser.add_argument("--num-envs", type=int, default=16,
                         help="Number of parallel environments")
-    parser.add_argument("--num-steps", type=int, default=2048,
+    parser.add_argument("--num-steps", type=int, default=1024,
                         help="Steps per rollout per environment")
-    parser.add_argument("--num-epochs", type=int, default=4,
+    parser.add_argument("--num-epochs", type=int, default=3,
                         help="PPO epochs per update")
-    parser.add_argument("--batch-size", type=int, default=64,
+    parser.add_argument("--batch-size", type=int, default=32,
                         help="Batch size (number of sequences)")
-    parser.add_argument("--seq-len", type=int, default=32,
+    parser.add_argument("--seq-len", type=int, default=16,
                         help="Sequence length for LSTM")
 
     # PPO hyperparameters
@@ -43,23 +43,23 @@ def parse_args():
                         help="Discount factor")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
                         help="GAE lambda")
-    parser.add_argument("--clip-epsilon", type=float, default=0.2,
+    parser.add_argument("--clip-epsilon", type=float, default=0.5,
                         help="PPO clip range")
     parser.add_argument("--value-coef", type=float, default=0.5,
                         help="Value loss coefficient")
-    parser.add_argument("--entropy-coef", type=float, default=0.03,
+    parser.add_argument("--entropy-coef", type=float, default=0.5,
                         help="Entropy bonus coefficient")
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
                         help="Maximum gradient norm")
-    parser.add_argument("--adam-eps", type=float, default=1e-5,
+    parser.add_argument("--adam-eps", type=float, default=1e-8,
                         help="Adam optimizer epsilon")
 
     # Network parameters
     parser.add_argument("--hidden-size", type=int, default=512,
-                        help="LSTM hidden size (512 for 2-layer architecture)")
-    parser.add_argument("--num-lstm-layers", type=int, default=2,
-                        help="Number of LSTM layers (fixed at 2)")
-
+                        help="LSTM hidden size")
+    parser.add_argument("--num-lstm-layers", type=int, default=1,
+                        help="Number of LSTM layers (fixed at 1)")
+    
     # Logging and checkpointing
     parser.add_argument("--log-dir", type=str, default="runs",
                         help="TensorBoard log directory")

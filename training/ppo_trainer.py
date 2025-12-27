@@ -27,7 +27,7 @@ class PPOTrainer:
         self,
         network: ActorCriticLSTM,
         learning_rate: float = 3e-4,
-        adam_eps: float = 1e-5,
+        adam_eps: float = 1e-8,
         clip_epsilon: float = 0.2,
         value_coef: float = 0.5,
         entropy_coef: float = 0.01,

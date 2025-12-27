@@ -54,24 +54,24 @@ class ActorCriticLSTM(nn.Module):
             output_size=512  # Compact feature representation
         )
 
-        # LSTM for temporal processing (2 layers, 512 hidden units each)
+        # LSTM for temporal processing
         self.lstm = nn.LSTM(
             input_size=512,  # Match CNN output_size
-            hidden_size=512,
-            num_layers=2,
+            hidden_size=hidden_size,
+            num_layers=num_lstm_layers,
             batch_first=True
         )
 
-        # Actor head (policy) - takes 512 from LSTM output
+        # Actor head (policy) - takes hidden_size from LSTM output
         self.actor = nn.Sequential(
-            nn.Linear(512, 256),
+            nn.Linear(hidden_size, 512),
             nn.ReLU(),
-            nn.Linear(256, num_actions)
+            nn.Linear(512, num_actions)
         )
 
-        # Critic head (value) - takes 512 from LSTM output
+        # Critic head (value) - takes hidden_size from LSTM output
         self.critic = nn.Sequential(
-            nn.Linear(512, 256),
+            nn.Linear(hidden_size, 256),
             nn.ReLU(),
             nn.Linear(256, 1)
         )
